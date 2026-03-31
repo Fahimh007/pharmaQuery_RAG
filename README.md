@@ -3,6 +3,7 @@
 A RAG-powered (Retrieval-Augmented Generation) question-answering application built with **LangChain**, **Google Gemini**, and **Streamlit**. PharmaQuery lets you upload pharmaceutical research documents and ask natural-language questions about them.
 
 ---
+Live demo: https://pharmaqueryrag-ff9pusxmo6n8zrrlmfwj2j.streamlit.app/
 
 ## ✨ Features
 
