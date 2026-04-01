@@ -1,20 +1,23 @@
 import os
+from pathlib import Path
+
 import streamlit as st
 from dotenv import load_dotenv
 
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import SentenceTransformersTokenTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
-from langchain_community import document_loaders
-from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import SentenceTransformersTokenTextSplitter
 
 load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent
+DB_DIR = BASE_DIR / "pharma_db"
+TEMP_DIR = BASE_DIR / "temp"
 
 def get_gemini_api_key():
     """Return Gemini API key from session state or environment variables."""
@@ -41,11 +44,22 @@ def get_embedding_model(api_key):
 @st.cache_resource
 def get_db(api_key):
     """Initialize and cache the Chroma database with embeddings."""
+    try:
+        from langchain_chroma import Chroma
+    except Exception as exc:
+        st.error(
+            "Chroma could not be loaded in this deployment. "
+            "This usually means the cloud environment installed an incompatible "
+            f"dependency set. Details: {exc}"
+        )
+        st.stop()
+
     embedding_model = get_embedding_model(api_key)
+    DB_DIR.mkdir(parents=True, exist_ok=True)
     return Chroma(
         collection_name="pharma_database",
         embedding_function=embedding_model,
-        persist_directory='./pharma_db'
+        persist_directory=str(DB_DIR)
     )
 
 def format_docs(docs):
@@ -83,36 +97,37 @@ def add_to_db(uploaded_files):
         return
 
     db = get_db(api_key)
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
     for uploaded_file in uploaded_files:
         # Save the uploaded file to a temporary path
-        temp_file_path = os.path.join("./temp", uploaded_file.name)
-        os.makedirs(os.path.dirname(temp_file_path), exist_ok=True)
+        temp_file_path = TEMP_DIR / uploaded_file.name
 
-        with open(temp_file_path, "wb") as temp_file:
+        with temp_file_path.open("wb") as temp_file:
             temp_file.write(uploaded_file.getbuffer())
 
-        # Load the file using PyPDFLoader
-        loader = PyPDFLoader(temp_file_path)
-        data = loader.load()
+        try:
+            # Load the file using PyPDFLoader
+            loader = PyPDFLoader(str(temp_file_path))
+            data = loader.load()
 
-        # Store metadata and content
-        doc_metadata = [data[i].metadata for i in range(len(data))]
-        doc_content = [data[i].page_content for i in range(len(data))]
+            # Store metadata and content
+            doc_metadata = [doc.metadata for doc in data]
+            doc_content = [doc.page_content for doc in data]
 
-        # Split documents into smaller chunks
-        st_text_splitter = SentenceTransformersTokenTextSplitter(
-            model_name="sentence-transformers/all-mpnet-base-v2",
-            chunk_size=100,
-            chunk_overlap=50
-        )
-        st_chunks = st_text_splitter.create_documents(doc_content, doc_metadata)
+            # Split documents into smaller chunks
+            st_text_splitter = SentenceTransformersTokenTextSplitter(
+                model_name="sentence-transformers/all-mpnet-base-v2",
+                chunk_size=100,
+                chunk_overlap=50
+            )
+            st_chunks = st_text_splitter.create_documents(doc_content, doc_metadata)
 
-        # Add chunks to database
-        db.add_documents(st_chunks)
-
-        # Remove the temporary file after processing
-        os.remove(temp_file_path)
+            # Add chunks to database
+            db.add_documents(st_chunks)
+        finally:
+            if temp_file_path.exists():
+                temp_file_path.unlink()
 
 def run_rag_chain(query):
     """Processes a query using a Retrieval-Augmented Generation (RAG) chain.
